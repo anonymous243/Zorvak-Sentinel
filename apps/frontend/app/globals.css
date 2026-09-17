@@ -1,0 +1,101 @@
+@import "tailwindcss";
+
+:root {
+  --accent: 99 102 241;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background: #09090b;
+  color: #f4f4f5;
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #52525b; }
+
+*:focus-visible {
+  outline: 2px solid rgb(var(--accent));
+  outline-offset: 2px;
+}
+
+.table-row-hover:hover {
+  background-color: rgba(255,255,255,0.03);
+}
+
+.sentinel-card {
+  background: #18181b;
+  border: 1px solid #27272a;
+  border-radius: 0.75rem;
+}
+
+.sentinel-input {
+  width: 100%;
+  background: #18181b;
+  border: 1px solid #3f3f46;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  color: #f4f4f5;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.sentinel-input::placeholder { color: #71717a; }
+.sentinel-input:focus {
+  border-color: #6366f1;
+  box-shadow: 0 0 0 1px #6366f1;
+}
+
+.sentinel-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: all 0.15s;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+}
+.sentinel-btn:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: 2px;
+}
+.sentinel-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.sentinel-btn-primary {
+  background: #4f46e5;
+  color: #ffffff;
+  border: none;
+}
+.sentinel-btn-primary:hover:not(:disabled) { background: #6366f1; }
+
+.sentinel-btn-secondary {
+  background: #27272a;
+  color: #e4e4e7;
+  border: 1px solid #3f3f46;
+}
+.sentinel-btn-secondary:hover:not(:disabled) { background: #3f3f46; }
+
+.sentinel-btn-danger {
+  background: rgba(127,29,29,0.6);
+  color: #fca5a5;
+  border: 1px solid #991b1b;
+}
+.sentinel-btn-danger:hover:not(:disabled) { background: rgba(127,29,29,0.9); }
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: 9999px;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
