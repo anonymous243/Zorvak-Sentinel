@@ -13,6 +13,9 @@ from sentinel_core.execution import ActionExecutor, ExecutionStatus, ExecutionRe
 from sentinel_core.models import ExecutionRecord, ExecutionReconciliation
 from sentinel_core.events import ActionExecutionEvent, ActionReconciliationEvent, serialize_event
 from sentinel_core import outbox_service
+from sentinel_core.models import RequestReplayRecord
+from datetime import timedelta
+from sentinel_core.request_signing import RequestReplayError, compute_request_fingerprint
 
 class GatewayExecutionResult:
     """
@@ -32,6 +35,69 @@ async def _get_existing_execution(session: AsyncSession, tenant_id: str, request
     return res.scalar_one_or_none()
 
 
+
+async def _verify_idempotency(
+    session, session_factory, existing, request, principal, timestamp, e
+) -> GatewayExecutionResult:
+    from sentinel_core.request_signing import compute_request_fingerprint, RequestReplayError
+    from sentinel_core.security_event_service import persist_security_event, SecurityEventCreate
+    
+    fingerprint = compute_request_fingerprint(request, principal, timestamp)
+    
+    if existing.agent_id != principal.agent_id:
+        await persist_security_event(
+            session,
+            SecurityEventCreate(
+                tenant_id=principal.tenant_id,
+                event_type="IDEMPOTENCY_MISMATCH",
+                occurred_at=datetime.now(timezone.utc),
+                outcome="FAILURE",
+                agent_id=principal.agent_id,
+                credential_id=principal.credential_id,
+                tool_id=request.tool_id,
+                policy_id=None,
+                policy_version_id=None,
+                execution_id=existing.id,
+                authorization_decision_id=None,
+                request_id=str(request.request_id),
+                reason_code="principal_mismatch",
+            ),
+            session_factory=session_factory,
+            principal=principal,
+            durable=True,
+        )
+        raise RequestReplayError("Request ID belongs to a different principal.") from e
+        
+    if existing.request_fingerprint != fingerprint:
+        await persist_security_event(
+            session,
+            SecurityEventCreate(
+                tenant_id=principal.tenant_id,
+                event_type="IDEMPOTENCY_MISMATCH",
+                occurred_at=datetime.now(timezone.utc),
+                outcome="FAILURE",
+                agent_id=principal.agent_id,
+                credential_id=principal.credential_id,
+                tool_id=request.tool_id,
+                policy_id=None,
+                policy_version_id=None,
+                execution_id=existing.id,
+                authorization_decision_id=None,
+                request_id=str(request.request_id),
+                reason_code="fingerprint_mismatch",
+            ),
+            session_factory=session_factory,
+            principal=principal,
+            durable=True,
+        )
+        raise RequestReplayError("Request fingerprint does not match the original execution.") from e
+
+    return GatewayExecutionResult(
+        execution_id=existing.id,
+        status=ExecutionStatus(existing.status),
+        authorization_decision_id=existing.authorization_decision_id
+    )
+
 async def enforce_and_execute(
     session_factory: async_sessionmaker[AsyncSession],
     request: ActionRequest,
@@ -49,44 +115,70 @@ async def enforce_and_execute(
     execution_id = str(uuid4())
     
     # ---------------------------------------------------------
-    # PHASE 1 & 2: AUTHORIZATION & EXECUTION INTENT
+    # PHASE 1: SIGNATURE VERIFICATION
+    # ---------------------------------------------------------
+    async with session_factory() as session:
+        async with session.begin():
+            # Verify request identity matches principal identity
+            if request.agent_id != principal.agent_id:
+                from sentinel_core.security_event_service import persist_security_event, SecurityEventCreate
+                await persist_security_event(
+                    session=session,
+                    event=SecurityEventCreate(
+                        tenant_id=principal.tenant_id,
+                        event_type="AUTHENTICATION_FAILED",
+                        occurred_at=datetime.now(timezone.utc),
+                        outcome="FAILURE",
+                        agent_id=None,
+                        request_id=str(request.request_id),
+                        tool_id=request.tool_id,
+                        reason_code="identity_mismatch",
+                        metadata={
+                            "auth_mechanism": "request_identity",
+                            "claimed_agent_id": str(request.agent_id),
+                            "principal_agent_id": str(principal.agent_id),
+                            "failure_category": "identity_mismatch",
+                        },
+                    ),
+                    session_factory=session_factory,
+                    durable=True,
+                )
+                raise ValueError("ActionRequest agent_id does not match AuthenticatedPrincipal")
+
+            # Verify Request Signature and Timestamp freshness
+            from sentinel_core.signing_key_service import verify_agent_request_signature
+            is_valid = await verify_agent_request_signature(
+                session=session,
+                request=request,
+                principal=principal,
+                timestamp=timestamp,
+                signature=signature,
+                signing_key_id=signing_key_id,
+                session_factory=session_factory,
+            )
+            if not is_valid:
+                raise ValueError("Request signature verification failed")
+    # ---------------------------------------------------------
+    # PHASE 2 & 3: AUTHORIZATION & REPLAY REGISTRATION
     # ---------------------------------------------------------
     try:
         async with session_factory() as session:
             async with session.begin():
-                
-                # Verify request identity matches principal identity
-                if request.agent_id != principal.agent_id:
-                    raise ValueError("ActionRequest agent_id does not match AuthenticatedPrincipal")
-
-                # Verify Request Signature and Timestamp freshness
-                from sentinel_core.signing_key_service import verify_agent_request_signature
-                is_valid = await verify_agent_request_signature(
-                    session=session,
-                    request=request,
-                    principal=principal,
-                    timestamp=timestamp,
-                    signature=signature,
-                    signing_key_id=signing_key_id
-                )
-                if not is_valid:
-                    raise ValueError("Request signature verification failed")
-
-                # Check for idempotency before authorizing, if possible, but authorization
-                # audit dictates we probably should do the check first to avoid
-                # generating duplicate authorization records.
                 existing = await _get_existing_execution(session, principal.tenant_id, str(request.request_id))
                 if existing:
-                    return GatewayExecutionResult(
-                        execution_id=existing.id,
-                        status=ExecutionStatus(existing.status),
-                        authorization_decision_id=existing.authorization_decision_id
-                    )
+                    return await _verify_idempotency(session, session_factory, existing, request, principal, timestamp, None)
 
-                decision = await authorize(session, request, principal)
+                replay_record = RequestReplayRecord(
+                    tenant_id=principal.tenant_id,
+                    agent_id=principal.agent_id,
+                    request_id=str(request.request_id),
+                    expires_at=datetime.now(timezone.utc) + timedelta(seconds=600)
+                )
+                session.add(replay_record)
+
+                decision = await authorize(session, request, principal, session_factory=session_factory)
                 
                 if not decision.allowed:
-                    # Execution is blocked
                     record = ExecutionRecord(
                         id=execution_id,
                         tenant_id=principal.tenant_id,
@@ -101,11 +193,10 @@ async def enforce_and_execute(
                         tool_id=decision.tool_id,
                         capability_id=decision.capability_id,
                         status=ExecutionStatus.NOT_EXECUTED.value,
+                        request_fingerprint=compute_request_fingerprint(request, principal, timestamp),
                     )
                     session.add(record)
-                    # We commit here to persist NOT_EXECUTED.
                 else:
-                    # ALLOW -> Execution Intent
                     record = ExecutionRecord(
                         id=execution_id,
                         tenant_id=principal.tenant_id,
@@ -120,23 +211,39 @@ async def enforce_and_execute(
                         tool_id=decision.tool_id,
                         capability_id=decision.capability_id,
                         status=ExecutionStatus.EXECUTION_PENDING.value,
+                        request_fingerprint=compute_request_fingerprint(request, principal, timestamp),
                     )
                     session.add(record)
-    except IntegrityError:
-        # A concurrent request beat us to creating the ExecutionRecord for this tenant_id + request_id.
-        # We catch the exception, let the session rollback, and fetch the winner.
+    except IntegrityError as e:
         async with session_factory() as session:
             async with session.begin():
                 existing = await _get_existing_execution(session, principal.tenant_id, str(request.request_id))
                 if existing:
-                    return GatewayExecutionResult(
-                        execution_id=existing.id,
-                        status=ExecutionStatus(existing.status),
-                        authorization_decision_id=existing.authorization_decision_id
-                    )
-                else:
-                    # Very strange concurrency artifact if it's missing, but fail safe.
-                    raise RuntimeError("Failed to resolve concurrent execution creation.")
+                    return await _verify_idempotency(session, session_factory, existing, request, principal, timestamp, e)
+
+                from sentinel_core.security_event_service import persist_security_event, SecurityEventCreate
+                await persist_security_event(
+                    session,
+                    SecurityEventCreate(
+                        tenant_id=principal.tenant_id,
+                        event_type="REPLAY_ATTEMPT",
+                        occurred_at=datetime.now(timezone.utc),
+                        outcome="FAILURE",
+                        agent_id=principal.agent_id,
+                        credential_id=principal.credential_id,
+                        tool_id=request.tool_id,
+                        policy_id=None,
+                        policy_version_id=None,
+                        execution_id=None,
+                        authorization_decision_id=None,
+                        request_id=str(request.request_id),
+                        reason_code="replay_detected",
+                    ),
+                    session_factory=session_factory,
+                    principal=principal,
+                    durable=True,
+                )
+                raise RequestReplayError("Request ID has already been used.") from e
 
     # Check if we were blocked by authorization
     if not decision.allowed:
@@ -145,8 +252,7 @@ async def enforce_and_execute(
             status=ExecutionStatus.NOT_EXECUTED,
             authorization_decision_id=str(decision.decision_id)
         )
-            
-    # Session commits and closes automatically here
+
     
     # ---------------------------------------------------------
     # PHASE 3: EXTERNAL EXECUTION
@@ -178,37 +284,47 @@ async def enforce_and_execute(
             from sentinel_core.security_event_service import persist_security_event, SecurityEventCreate
             
             if final_status == ExecutionStatus.EXECUTION_FAILED:
-                await persist_security_event(session, SecurityEventCreate(
-                    tenant_id=principal.tenant_id,
-                    event_type="EXECUTION_FAILED",
-                    occurred_at=datetime.now(timezone.utc),
-                    outcome="FAILURE",
-                    agent_id=principal.agent_id,
-                    credential_id=principal.credential_id,
-                    tool_id=decision.tool_id,
-                    policy_id=decision.policy_id,
-                    policy_version_id=decision.policy_version_id,
-                    execution_id=execution_id,
-                    authorization_decision_id=str(decision.decision_id),
-                    request_id=str(request.request_id),
-                    reason_code="execution_failed",
-                ))
+                await persist_security_event(
+                    session=session,
+                    event=SecurityEventCreate(
+                        tenant_id=principal.tenant_id,
+                        event_type="EXECUTION_FAILED",
+                        occurred_at=datetime.now(timezone.utc),
+                        outcome="FAILURE",
+                        agent_id=principal.agent_id,
+                        credential_id=principal.credential_id,
+                        tool_id=decision.tool_id,
+                        policy_id=decision.policy_id,
+                        policy_version_id=decision.policy_version_id,
+                        execution_id=execution_id,
+                        authorization_decision_id=str(decision.decision_id),
+                        request_id=str(request.request_id),
+                        reason_code="execution_failed",
+                    ),
+                    session_factory=session_factory,
+                    principal=principal,
+                )
             elif final_status == ExecutionStatus.EXECUTION_UNKNOWN:
-                await persist_security_event(session, SecurityEventCreate(
-                    tenant_id=principal.tenant_id,
-                    event_type="EXECUTION_UNKNOWN",
-                    occurred_at=datetime.now(timezone.utc),
-                    outcome="UNKNOWN",
-                    agent_id=principal.agent_id,
-                    credential_id=principal.credential_id,
-                    tool_id=decision.tool_id,
-                    policy_id=decision.policy_id,
-                    policy_version_id=decision.policy_version_id,
-                    execution_id=execution_id,
-                    authorization_decision_id=str(decision.decision_id),
-                    request_id=str(request.request_id),
-                    reason_code="execution_ambiguous",
-                ))
+                await persist_security_event(
+                    session=session,
+                    event=SecurityEventCreate(
+                        tenant_id=principal.tenant_id,
+                        event_type="EXECUTION_UNKNOWN",
+                        occurred_at=datetime.now(timezone.utc),
+                        outcome="UNKNOWN",
+                        agent_id=principal.agent_id,
+                        credential_id=principal.credential_id,
+                        tool_id=decision.tool_id,
+                        policy_id=decision.policy_id,
+                        policy_version_id=decision.policy_version_id,
+                        execution_id=execution_id,
+                        authorization_decision_id=str(decision.decision_id),
+                        request_id=str(request.request_id),
+                        reason_code="execution_ambiguous",
+                    ),
+                    session_factory=session_factory,
+                    principal=principal,
+                )
             
             # Create execution event
             event = ActionExecutionEvent(

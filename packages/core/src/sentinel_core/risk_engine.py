@@ -16,6 +16,7 @@ from sentinel_core.risk import (
 SENSITIVE_ACTION_SCORE = 30
 SENSITIVE_RESOURCE_SCORE = 40
 ANOMALOUS_CONTEXT_SCORE = 20
+BEHAVIORAL_DEVIATION_SCORE = 30
 
 # We can define a set of known sensitive actions/resources for deterministic evaluation.
 # In a real system, these might come from configuration or a database.
@@ -35,6 +36,13 @@ def _is_sensitive_resource(resource: str) -> bool:
 def _has_anomalous_context(context: Mapping[str, str]) -> bool:
     # Explicitly supplied contextual anomaly indicators
     return context.get("anomalous") == "true" or context.get("risk_indicator") == "high"
+
+def _has_behavioral_deviation(context: Mapping[str, str]) -> bool:
+    return (
+        context.get("behavioral_deviation") == "true"
+        or context.get("deviation") == "true"
+        or context.get("unusual_pattern") == "true"
+    )
 
 
 def _map_score_to_level(score: int) -> RiskLevel:
@@ -79,7 +87,11 @@ async def evaluate_risk(
         if _has_anomalous_context(request.context):
             score += ANOMALOUS_CONTEXT_SCORE
             factors.append(RiskFactor.ANOMALOUS_CONTEXT)
-            
+
+        if _has_behavioral_deviation(request.context) and RiskFactor.BEHAVIORAL_DEVIATION not in factors:
+            score += BEHAVIORAL_DEVIATION_SCORE
+            factors.append(RiskFactor.BEHAVIORAL_DEVIATION)
+
         # Get behavioral signals
         signals = await behavior_provider.get_signals(
             tenant_id=principal.tenant_id,

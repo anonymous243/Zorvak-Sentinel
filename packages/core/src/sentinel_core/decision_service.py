@@ -4,13 +4,14 @@ import json
 from sentinel_core.authorization import AuthorizationDecision
 from sentinel_core.models import AuthorizationDecisionRecord, RiskAssessmentRecord
 from sentinel_core.risk import RiskAssessment
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 
 async def record_decision(
     session: AsyncSession,
     decision: AuthorizationDecision,
     risk_assessment: RiskAssessment | None = None,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> AuthorizationDecisionRecord:
     """
     Persist a completed authorization decision and its associated risk assessment.
@@ -40,29 +41,37 @@ async def record_decision(
         from sentinel_core.risk import RiskLevel, RiskEvaluationStatus
 
         if risk_assessment.level == RiskLevel.CRITICAL:
-            await persist_security_event(session, SecurityEventCreate(
-                tenant_id=risk_assessment.tenant_id,
-                event_type="RISK_CRITICAL",
-                occurred_at=datetime.now(timezone.utc),
-                outcome="FAILURE",
-                agent_id=risk_assessment.agent_id,
-                credential_id=risk_assessment.credential_id,
-                request_id=str(risk_assessment.request_id),
-                reason_code="critical_risk_score",
-                metadata={"score": risk_assessment.score, "factors": [f.value for f in risk_assessment.factors]}
-            ))
+            await persist_security_event(
+                session=session,
+                event=SecurityEventCreate(
+                    tenant_id=risk_assessment.tenant_id,
+                    event_type="RISK_CRITICAL",
+                    occurred_at=datetime.now(timezone.utc),
+                    outcome="FAILURE",
+                    agent_id=risk_assessment.agent_id,
+                    credential_id=risk_assessment.credential_id,
+                    request_id=str(risk_assessment.request_id),
+                    reason_code="critical_risk_score",
+                    metadata={"score": risk_assessment.score, "factors": [f.value for f in risk_assessment.factors]}
+                ),
+                session_factory=session_factory,
+            )
         elif risk_assessment.status == RiskEvaluationStatus.ERROR:
-            await persist_security_event(session, SecurityEventCreate(
-                tenant_id=risk_assessment.tenant_id,
-                event_type="RISK_EVALUATION_FAILURE",
-                occurred_at=datetime.now(timezone.utc),
-                outcome="FAILURE",
-                agent_id=risk_assessment.agent_id,
-                credential_id=risk_assessment.credential_id,
-                request_id=str(risk_assessment.request_id),
-                reason_code="evaluation_error",
-                metadata={"score": risk_assessment.score}
-            ))
+            await persist_security_event(
+                session=session,
+                event=SecurityEventCreate(
+                    tenant_id=risk_assessment.tenant_id,
+                    event_type="RISK_EVALUATION_FAILURE",
+                    occurred_at=datetime.now(timezone.utc),
+                    outcome="FAILURE",
+                    agent_id=risk_assessment.agent_id,
+                    credential_id=risk_assessment.credential_id,
+                    request_id=str(risk_assessment.request_id),
+                    reason_code="evaluation_error",
+                    metadata={"score": risk_assessment.score}
+                ),
+                session_factory=session_factory,
+            )
 
         await session.flush()
 

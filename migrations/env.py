@@ -9,7 +9,12 @@ from alembic import context
 from sentinel_core.models import Base
 
 
+import os
+
 config = context.config
+
+if os.getenv("DATABASE_URL"):
+    config.set_main_option("sqlalchemy.url", os.getenv("DATABASE_URL"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
@@ -50,7 +55,9 @@ async def run_async_migrations() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args={"prepared_statement_cache_size": 0, "statement_cache_size": 0} if config.get_main_option("sqlalchemy.url", "").startswith("postgresql") else {},
     )
+    connectable = connectable.execution_options(compiled_cache=None)
 
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)

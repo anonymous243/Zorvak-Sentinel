@@ -25,6 +25,14 @@ class DecisionReason(StrEnum):
     RISK_EVALUATION_ERROR = "risk_evaluation_error"
     CAPABILITY_DENIED = "capability_denied"
     INVALID_POLICY_STATE = "invalid_policy_state"
+    DELEGATION_DENIED = "delegation_denied"
+    DELEGATION_NOT_FOUND = "delegation_not_found"
+    DELEGATION_EXPIRED = "delegation_expired"
+    DELEGATION_REVOKED = "delegation_revoked"
+    DELEGATION_SCOPE_VIOLATION = "delegation_scope_violation"
+    CONFUSED_DEPUTY_DENIED = "confused_deputy_denied"
+    TRANSITIVE_DELEGATION_DENIED = "transitive_delegation_denied"
+    IMPERSONATION_ATTEMPT = "impersonation_attempt"
 
 
 class ActionRequest(BaseModel):
@@ -50,6 +58,7 @@ class ActionRequest(BaseModel):
     # Optional caller-provided context. The authorization engine must never
     # silently treat arbitrary context as trusted identity information.
     context: Mapping[str, str] = Field(default_factory=dict)
+    delegation_id: str | None = Field(default=None, max_length=36)
 
 
 class AuthorizationDecision(BaseModel):
@@ -83,6 +92,12 @@ class AuthorizationDecision(BaseModel):
     tool_id: str | None = None
     capability_id: str | None = None
 
+    # Multi-agent provenance tracking (SI-053, SI-054, SI-055)
+    delegation_id: str | None = None
+    delegator_agent_id: str | None = None
+    delegate_agent_id: str | None = None
+    effective_agent_id: str | None = None
+
     evaluated_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
@@ -92,3 +107,4 @@ class AuthorizationDecision(BaseModel):
     @property
     def allowed(self) -> bool:
         return self.effect is DecisionEffect.ALLOW
+

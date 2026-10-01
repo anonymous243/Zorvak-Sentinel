@@ -6,3 +6,4 @@ alembic==1.20.0
 bcrypt==4.1.2
 
 cryptography==45.0.7
+asyncpg==0.29.0

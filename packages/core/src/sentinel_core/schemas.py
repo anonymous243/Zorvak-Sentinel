@@ -34,6 +34,7 @@ class AgentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    tenant_id: str
     name: str
     description: str | None
     provider: str | None
@@ -148,3 +149,115 @@ class PolicyAuditResponse(BaseModel):
     occurred_at: datetime
     correlation_id: str | None
     request_id: str | None
+
+
+class HighRiskActionRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+
+    action_payload: dict
+    required_signatures: int = Field(default=2, ge=1)
+
+class EvidenceType(StrEnum):
+    REQUEST = "REQUEST"
+    IDENTITY = "IDENTITY"
+    CAPABILITY = "CAPABILITY"
+    POLICY = "POLICY"
+    RISK = "RISK"
+    DECISION = "DECISION"
+    EXECUTION = "EXECUTION"
+    SECURITY_EVENT = "SECURITY_EVENT"
+    INCIDENT = "INCIDENT"
+    ALERT = "ALERT"
+
+class EvidenceResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    tenant_id: str
+    incident_id: str | None
+    alert_id: str | None
+    evidence_type: str
+    source_type: str
+    source_id: str
+    description: str
+    metadata_payload: str | None
+    integrity_digest: str | None
+    captured_at: datetime
+    created_at: datetime
+
+class InvestigationCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    
+    incident_id: str = Field(min_length=1, max_length=36)
+    title: str = Field(min_length=1, max_length=255)
+    summary: str | None = None
+    severity: str = Field(default="MEDIUM", max_length=32)
+    assigned_to: str | None = None
+
+
+class InvestigationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    tenant_id: str
+    incident_id: str
+    alert_id: str | None
+    status: str
+    severity: str
+    title: str
+    summary: str | None
+    assigned_to: str | None
+    created_at: datetime
+    updated_at: datetime
+    resolved_at: datetime | None
+    closed_at: datetime | None
+
+
+class InvestigationStatusTransition(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    status: str = Field(min_length=1, max_length=32)
+    reason: str | None = None
+
+
+class InvestigationNoteCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    
+    content: str = Field(min_length=1)
+
+
+class InvestigationNoteResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: str
+    investigation_id: str
+    tenant_id: str
+    author_id: str
+    content: str
+    created_at: datetime
+
+
+class InvestigationFindingCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    
+    title: str = Field(min_length=1, max_length=255)
+    description: str = Field(min_length=1)
+    severity: str | None = Field(default=None, max_length=32)
+    status: str = Field(default="OPEN", max_length=32)
+
+
+class InvestigationFindingResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: str
+    investigation_id: str
+    tenant_id: str
+    title: str
+    description: str
+    severity: str | None
+    status: str
+    created_by: str
+    created_at: datetime
+    updated_at: datetime

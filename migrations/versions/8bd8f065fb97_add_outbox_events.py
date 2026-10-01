@@ -48,4 +48,9 @@ def downgrade() -> None:
     op.drop_index('ix_outbox_events_status_available_at', table_name='outbox_events')
     op.drop_index('ix_outbox_events_correlation_id', table_name='outbox_events')
     op.drop_table('outbox_events')
+    
+    # Drop enum type in postgresql
+    bind = op.get_bind()
+    if bind.engine.name == 'postgresql':
+        op.execute("DROP TYPE IF EXISTS outbox_status")
     # ### end Alembic commands ###

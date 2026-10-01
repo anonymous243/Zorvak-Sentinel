@@ -96,3 +96,8 @@ def downgrade() -> None:
     )
 
     op.drop_table("authorization_decisions")
+    
+    # Drop enum type in postgresql
+    bind = op.get_bind()
+    if bind.engine.name == 'postgresql':
+        op.execute("DROP TYPE IF EXISTS decision_effect")

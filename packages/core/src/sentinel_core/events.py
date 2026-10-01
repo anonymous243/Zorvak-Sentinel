@@ -153,6 +153,62 @@ class IncidentCreatedEvent(BaseModel):
     occurred_at: datetime
 
 
+class AlertCreatedEvent(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    
+    event_type: Literal["security.alert.created"] = Field(default="security.alert.created")
+    event_id: UUID = Field(default_factory=uuid4)
+    schema_version: int = Field(default=1)
+    
+    alert_id: str
+    tenant_id: str
+    incident_id: str
+    status: str
+    occurred_at: datetime
+
+
+class AlertAcknowledgedEvent(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    
+    event_type: Literal["security.alert.acknowledged"] = Field(default="security.alert.acknowledged")
+    event_id: UUID = Field(default_factory=uuid4)
+    schema_version: int = Field(default=1)
+    
+    alert_id: str
+    tenant_id: str
+    actor_id: str
+    occurred_at: datetime
+
+
+class AlertResolvedEvent(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    
+    event_type: Literal["security.alert.resolved"] = Field(default="security.alert.resolved")
+    event_id: UUID = Field(default_factory=uuid4)
+    schema_version: int = Field(default=1)
+    
+    alert_id: str
+    tenant_id: str
+    actor_id: str
+    occurred_at: datetime
+
+
+class EvidenceCreatedEvent(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    event_type: Literal["security.evidence.created"] = Field(default="security.evidence.created")
+    event_id: UUID = Field(default_factory=uuid4)
+    schema_version: int = Field(default=1)
+
+    evidence_id: str
+    tenant_id: str
+    incident_id: str | None = None
+    evidence_type: str
+    source_type: str
+    source_id: str
+    captured_at: datetime
+
+
 def deserialize_event(payload: str) -> BaseModel:
     """
     Deserializes a JSON string back into an Event based on event_type.
@@ -168,6 +224,14 @@ def deserialize_event(payload: str) -> BaseModel:
         return ActionReconciliationEvent.model_validate(payload_dict)
     elif event_type == "security.incident.created":
         return IncidentCreatedEvent.model_validate(payload_dict)
+    elif event_type == "security.alert.created":
+        return AlertCreatedEvent.model_validate(payload_dict)
+    elif event_type == "security.alert.acknowledged":
+        return AlertAcknowledgedEvent.model_validate(payload_dict)
+    elif event_type == "security.alert.resolved":
+        return AlertResolvedEvent.model_validate(payload_dict)
+    elif event_type == "security.evidence.created":
+        return EvidenceCreatedEvent.model_validate(payload_dict)
         
     # Fallback to base or dict for others (or raise)
     return payload_dict

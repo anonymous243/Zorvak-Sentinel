@@ -23,16 +23,13 @@ const NAV = [
 ];
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
-  const { authenticated, logout, agentId } = useAuth();
+  const { user, organizations, activeTenantId, setActiveTenant, logout } = useAuth();
   const pathname = usePathname();
   const router = useRouter();
   const [open, setOpen] = useState(false);
 
-  useEffect(() => {
-    if (!authenticated) router.push('/login');
-  }, [authenticated, router]);
-
-  if (!authenticated) return null;
+  // user check is handled in AuthProvider now (which redirects if no user).
+  if (!user) return null;
 
   return (
     <div className="flex h-screen overflow-hidden bg-zinc-950">
@@ -78,17 +75,31 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
         {/* User */}
         <div className="px-2 py-3 border-t border-zinc-800">
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg">
-            <div className="w-6 h-6 bg-indigo-700 rounded-full flex items-center justify-center shrink-0">
-              <span className="text-[10px] font-bold text-white">A</span>
+          <div className="flex flex-col gap-2 px-3 py-2">
+            {organizations.length > 0 && (
+              <select
+                value={activeTenantId || ''}
+                onChange={(e) => setActiveTenant(e.target.value)}
+                className="w-full bg-zinc-950 border border-zinc-800 text-xs text-white rounded p-1"
+              >
+                {organizations.map(org => (
+                  <option key={org.id} value={org.id}>{org.name}</option>
+                ))}
+              </select>
+            )}
+            
+            <div className="flex items-center gap-2 pt-2">
+              <div className="w-6 h-6 bg-indigo-700 rounded-full flex items-center justify-center shrink-0">
+                <span className="text-[10px] font-bold text-white">{user.name.charAt(0).toUpperCase()}</span>
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-xs text-zinc-300 truncate font-medium">{user.name}</div>
+                <div className="text-[10px] text-zinc-600 truncate">{user.email}</div>
+              </div>
+              <button onClick={logout} className="text-zinc-500 hover:text-red-400 transition-colors" aria-label="Sign out" id="logout-btn">
+                <LogOut size={14} />
+              </button>
             </div>
-            <div className="min-w-0 flex-1">
-              <div className="text-xs text-zinc-300 truncate font-mono">{agentId.slice(0, 16)}…</div>
-              <div className="text-[10px] text-zinc-600">Agent Principal</div>
-            </div>
-            <button onClick={logout} className="text-zinc-500 hover:text-red-400 transition-colors" aria-label="Sign out" id="logout-btn">
-              <LogOut size={14} />
-            </button>
           </div>
         </div>
       </aside>

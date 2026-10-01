@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timezone
 
@@ -13,6 +14,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 from sentinel_core.authorization import ActionRequest
 from sentinel_core.principals import AuthenticatedPrincipal
 
+class RequestReplayError(ValueError):
+    """Raised when a valid signed request is submitted more than once."""
+    pass
 
 def canonicalize_request(
     request: ActionRequest,
@@ -40,6 +44,8 @@ def canonicalize_request(
         "resource": request.resource,
         "timestamp": timestamp_utc.isoformat(),
     }
+    if getattr(request, "delegation_id", None):
+        payload["delegation_id"] = str(request.delegation_id)
 
     return json.dumps(
         payload,
@@ -47,6 +53,18 @@ def canonicalize_request(
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
+
+
+def compute_request_fingerprint(
+    request: ActionRequest,
+    principal: AuthenticatedPrincipal,
+    timestamp: datetime,
+) -> str:
+    """
+    Generate an authoritative canonical fingerprint for idempotency.
+    """
+    canonical_bytes = canonicalize_request(request, principal, timestamp)
+    return hashlib.sha256(canonical_bytes).hexdigest()
 
 
 def generate_signing_keypair() -> tuple[str, str]:
@@ -106,6 +124,54 @@ def sign_request(
     return base64.urlsafe_b64encode(signature).decode("ascii")
 
 
+def verify_request_signature_detailed(
+    public_key_pem: str,
+    signature: str,
+    request: ActionRequest,
+    principal: AuthenticatedPrincipal,
+    timestamp: datetime,
+) -> tuple[bool, str | None]:
+    """
+    Verify an Ed25519 signature over the canonical request, returning
+    (is_valid, failure_reason).
+    """
+    import base64
+
+    if not signature or not signature.strip():
+        return False, "missing_signature"
+
+    try:
+        public_key = serialization.load_pem_public_key(
+            public_key_pem.encode("ascii"),
+        )
+        if not isinstance(public_key, Ed25519PublicKey):
+            return False, "invalid_signing_key_type"
+    except Exception:
+        return False, "malformed_signing_key"
+
+    try:
+        signature_bytes = base64.urlsafe_b64decode(
+            signature.encode("ascii"),
+        )
+        if len(signature_bytes) != 64:
+            return False, "malformed_signature"
+    except Exception:
+        return False, "malformed_signature"
+
+    try:
+        payload = canonicalize_request(
+            request,
+            principal,
+            timestamp,
+        )
+        public_key.verify(signature_bytes, payload)
+        return True, None
+    except InvalidSignature:
+        return False, "invalid_signature"
+    except Exception:
+        return False, "invalid_signature"
+
+
 def verify_request_signature(
     public_key_pem: str,
     signature: str,
@@ -119,32 +185,12 @@ def verify_request_signature(
     Any malformed key, malformed signature, or invalid signature fails
     closed and returns False.
     """
-    import base64
+    valid, _ = verify_request_signature_detailed(
+        public_key_pem=public_key_pem,
+        signature=signature,
+        request=request,
+        principal=principal,
+        timestamp=timestamp,
+    )
+    return valid
 
-    try:
-        public_key = serialization.load_pem_public_key(
-            public_key_pem.encode("ascii"),
-        )
-
-        if not isinstance(public_key, Ed25519PublicKey):
-            return False
-
-        signature_bytes = base64.urlsafe_b64decode(
-            signature.encode("ascii"),
-        )
-
-        payload = canonicalize_request(
-            request,
-            principal,
-            timestamp,
-        )
-
-        public_key.verify(signature_bytes, payload)
-        return True
-
-    except (
-        ValueError,
-        TypeError,
-        InvalidSignature,
-    ):
-        return False

@@ -24,6 +24,12 @@ class Tenant(Base):
         nullable=False,
     )
 
+    slug: Mapped[str | None] = mapped_column(
+        String(255),
+        unique=True,
+        nullable=True,
+    )
+
     status: Mapped[str] = mapped_column(
         String(32),
         nullable=False,
@@ -41,6 +47,92 @@ class Tenant(Base):
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+
+    email: Mapped[str] = mapped_column(
+        String(255),
+        unique=True,
+        nullable=False,
+    )
+
+    password_hash: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+
+    name: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="active",
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+
+class Membership(Base):
+    __tablename__ = "memberships"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "tenant_id",
+            name="uq_memberships_user_tenant",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+
+    user_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("users.id"),
+        nullable=False,
+    )
+
+    tenant_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("tenants.id"),
+        nullable=False,
+    )
+
+    role: Mapped[str] = mapped_column(
+        Enum("OWNER", "ADMIN", "SECURITY", "DEVELOPER", "VIEWER", name="membership_role"),
+        nullable=False,
+        default="VIEWER",
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="active",
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
     )
 
 
@@ -103,6 +195,102 @@ class Agent(Base):
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class AgentSecurityDomain(Base):
+    __tablename__ = "agent_security_domains"
+
+    __table_args__ = (
+        Index("ix_agent_security_domains_tenant", "tenant_id"),
+        UniqueConstraint("tenant_id", "name", name="uix_tenant_domain_name"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("tenants.id"),
+        nullable=False,
+    )
+
+    name: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="active",
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class AgentSecurityDomainMembership(Base):
+    __tablename__ = "agent_security_domain_memberships"
+
+    __table_args__ = (
+        Index("ix_agent_security_domain_memberships_domain", "domain_id"),
+        Index("ix_agent_security_domain_memberships_agent", "agent_id"),
+        UniqueConstraint("domain_id", "agent_id", name="uix_domain_agent"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("tenants.id"),
+        nullable=False,
+    )
+
+    domain_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("agent_security_domains.id"),
+        nullable=False,
+    )
+
+    agent_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("agents.id"),
+        nullable=False,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="active",
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
     )
 
 
@@ -600,6 +788,12 @@ class ExecutionRecord(Base):
     request_id: Mapped[str] = mapped_column(
         String(36),
         nullable=False,
+    )
+
+    request_fingerprint: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        server_default="",
     )
 
     authorization_decision_id: Mapped[str] = mapped_column(
@@ -1137,6 +1331,15 @@ class Incident(Base):
     __table_args__ = (
         Index("ix_incidents_tenant_status", "tenant_id", "status"),
         Index("ix_incidents_tenant_rule_created", "tenant_id", "detection_rule_id", "created_at"),
+        # Partial unique index: only one OPEN incident per logical (tenant, rule, agent) triple.
+        # Both SQLite and PostgreSQL support WHERE-clause partial indexes via SQLAlchemy text().
+        Index(
+            "uix_incidents_dedup_key_open",
+            "dedup_key",
+            unique=True,
+            sqlite_where=text("status = 'OPEN'"),
+            postgresql_where=text("status = 'OPEN'"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
@@ -1148,6 +1351,9 @@ class Incident(Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     metadata_payload: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Deterministic deduplication key: SHA-256("v1:INCIDENT_DEDUP:<tenant_id>:<rule_id>:<agent_id|''>")
+    # Enables the database-level partial unique index to prevent concurrent duplicate incidents.
+    dedup_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -1170,38 +1376,80 @@ class IncidentAuditRecord(Base):
     actor_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
 
-class AlertChannel(Base):
-    __tablename__ = "alert_channels"
-
-    __table_args__ = (
-        Index("ix_alert_channels_tenant_status", "tenant_id", "status"),
-    )
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
-    name: Mapped[str] = mapped_column(String(128), nullable=False)
-    channel_type: Mapped[str] = mapped_column(String(32), nullable=False) # e.g., 'WEBHOOK', 'SLACK'
-    configuration: Mapped[str] = mapped_column(Text, nullable=False) # JSON
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
-
 class Alert(Base):
     __tablename__ = "alerts"
 
     __table_args__ = (
-        Index("ix_alerts_tenant_incident", "tenant_id", "incident_id"),
         Index("ix_alerts_tenant_status", "tenant_id", "status"),
+        Index(
+            "uix_alerts_incident_open",
+            "incident_id",
+            unique=True,
+            sqlite_where=text("status = 'OPEN'"),
+            postgresql_where=text("status = 'OPEN'"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
     incident_id: Mapped[str] = mapped_column(String(36), ForeignKey("incidents.id"), nullable=False)
-    channel_id: Mapped[str] = mapped_column(String(36), ForeignKey("alert_channels.id"), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING")
-    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="OPEN")
+    severity: Mapped[str] = mapped_column(String(32), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    acknowledged_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+
+
+class AlertAuditRecord(Base):
+    __tablename__ = "alert_audit_records"
+
+    __table_args__ = (
+        Index("ix_alert_audit_tenant", "tenant_id"),
+        Index("ix_alert_audit_alert", "alert_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    alert_id: Mapped[str] = mapped_column(String(36), ForeignKey("alerts.id"), nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    operation: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class Evidence(Base):
+    __tablename__ = "evidence"
+
+    __table_args__ = (
+        Index("ix_evidence_tenant_type", "tenant_id", "evidence_type"),
+        Index("ix_evidence_incident", "incident_id"),
+        Index("ix_evidence_alert", "alert_id"),
+        UniqueConstraint(
+            "tenant_id", "evidence_type", "source_type", "source_id", "incident_id",
+            name="uq_evidence_identity"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
+    incident_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("incidents.id"), nullable=True)
+    alert_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("alerts.id"), nullable=True)
+    
+    evidence_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    metadata_payload: Mapped[str | None] = mapped_column(Text, nullable=True) # JSON stored as Text
+    integrity_digest: Mapped[str | None] = mapped_column(String(64), nullable=True) # SHA-256
+    
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
 class Investigation(Base):
@@ -1209,17 +1457,83 @@ class Investigation(Base):
 
     __table_args__ = (
         Index("ix_investigations_tenant_status", "tenant_id", "status"),
+        Index(
+            "uix_investigations_incident_active",
+            "incident_id",
+            unique=True,
+            sqlite_where=text("status != 'CLOSED' AND status != 'RESOLVED'"),
+            postgresql_where=text("status != 'CLOSED' AND status != 'RESOLVED'"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="OPEN")
+    incident_id: Mapped[str] = mapped_column(String(36), ForeignKey("incidents.id"), nullable=False)
+    alert_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("alerts.id"), nullable=True)
+    
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="OPEN") # OPEN, IN_PROGRESS, CONTAINED, RESOLVED, CLOSED
+    severity: Mapped[str] = mapped_column(String(32), nullable=False, default="MEDIUM")
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    
+    assigned_to: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
+    
+    # Legacy fields to preserve if existing
     owner_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     head_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+class InvestigationNote(Base):
+    __tablename__ = "investigation_notes"
+    
+    __table_args__ = (
+        Index("ix_inv_notes_tenant_inv", "tenant_id", "investigation_id"),
+    )
+    
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    investigation_id: Mapped[str] = mapped_column(String(36), ForeignKey("investigations.id"), nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    author_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+class InvestigationFinding(Base):
+    __tablename__ = "investigation_findings"
+    
+    __table_args__ = (
+        Index("ix_inv_findings_tenant_inv", "tenant_id", "investigation_id"),
+    )
+    
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    investigation_id: Mapped[str] = mapped_column(String(36), ForeignKey("investigations.id"), nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    severity: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="OPEN")
+    created_by: Mapped[str] = mapped_column(String(36), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+class InvestigationAuditRecord(Base):
+    __tablename__ = "investigation_audit_records"
+
+    __table_args__ = (
+        Index("ix_inv_audit_tenant", "tenant_id"),
+        Index("ix_inv_audit_inv", "investigation_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    investigation_id: Mapped[str] = mapped_column(String(36), ForeignKey("investigations.id"), nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    operation: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    metadata_payload: Mapped[str | None] = mapped_column(Text, nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
 class EvidenceLedgerRecord(Base):
     __tablename__ = "evidence_ledger_records"
@@ -1354,13 +1668,53 @@ class CryptographicLease(Base):
 
 
 class AIAgentAttestation(Base):
+    """
+    Software Agent Attestation model.
+    
+    Proves Ed25519 signature verification over a claimed agent/model payload.
+    Does NOT prove hardware TEE execution, enclave isolation, secure boot,
+    or runtime model memory integrity.
+    """
     __tablename__ = "ai_agent_attestations"
     
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     agent_id: Mapped[str] = mapped_column(String(36), ForeignKey("agents.id"), nullable=False, unique=True)
-    model_hash: Mapped[str] = mapped_column(String(255), nullable=False)
-    tee_signature: Mapped[str] = mapped_column(String(1024), nullable=False)
+    model_hash: Mapped[str] = mapped_column(String(255), nullable=False)  # Claimed model hash
+    tee_signature: Mapped[str] = mapped_column(String(1024), nullable=False)  # Software Ed25519 signature hex (legacy DB column name)
     verified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    @property
+    def attestation_type(self) -> str:
+        return "software_signed"
+
+    @property
+    def claimed_model_hash(self) -> str:
+        return self.model_hash
+
+    @property
+    def software_signature(self) -> str:
+        return self.tee_signature
+
+    @property
+    def hardware_attestation(self) -> bool:
+        return False
+
+    @property
+    def hardware_attestation_verified(self) -> bool:
+        return False
+
+    def to_verification_result(self) -> dict:
+        return {
+            "attestation_type": "software_signed",
+            "signature_valid": True,
+            "signing_key_verified": True,
+            "agent_id": self.agent_id,
+            "claimed_model_hash": self.model_hash,
+            "hardware_attestation": False,
+            "hardware_attestation_verified": False,
+            "verified_at": self.verified_at.isoformat() if self.verified_at else None,
+        }
+
 
 
 class AIActionVelocityState(Base):
@@ -1375,6 +1729,13 @@ class AIActionVelocityState(Base):
 class AIPendingHighRiskAction(Base):
     __tablename__ = "ai_pending_high_risk_actions"
     
+    __table_args__ = (
+        CheckConstraint(
+            "required_signatures >= 1",
+            name="ck_ai_pending_high_risk_actions_required_signatures",
+        ),
+    )
+
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     agent_id: Mapped[str] = mapped_column(String(36), ForeignKey("agents.id"), nullable=False)
     action_payload: Mapped[str] = mapped_column(Text, nullable=False)  # JSON payload
@@ -1383,4 +1744,270 @@ class AIPendingHighRiskAction(Base):
     status: Mapped[str] = mapped_column(String(50), default="pending", nullable=False)  # pending, executed, rejected
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
+
+
+
+
+
+
+class RequestReplayRecord(Base):
+    __tablename__ = "request_replay_records"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "request_id",
+            name="uq_request_replay_records_tenant_request",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(
+        String(36),
+        nullable=False,
+    )
+
+    agent_id: Mapped[str] = mapped_column(
+        String(36),
+        nullable=False,
+    )
+
+    request_id: Mapped[str] = mapped_column(
+        String(36),
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+
+
+class AgentTrustRelationship(Base):
+    __tablename__ = "agent_trust_relationships"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "source_agent_id",
+            "target_agent_id",
+            name="uq_agent_trust_tenant_source_target",
+        ),
+        CheckConstraint(
+            "source_agent_id != target_agent_id",
+            name="ck_agent_trust_no_self_trust",
+        ),
+        CheckConstraint(
+            "status IN ('ACTIVE', 'REVOKED', 'EXPIRED')",
+            name="ck_agent_trust_status_valid",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    source_agent_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("agents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    target_agent_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("agents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="ACTIVE",
+    )
+
+    trust_scope: Mapped[dict] = mapped_column(
+        JSON,
+        nullable=False,
+        default=dict,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    meta_data: Mapped[dict] = mapped_column(
+        "metadata",
+        JSON,
+        nullable=False,
+        default=dict,
+    )
+
+
+class AgentDelegation(Base):
+    __tablename__ = "agent_delegations"
+
+    __table_args__ = (
+        CheckConstraint(
+            "delegator_agent_id != delegate_agent_id",
+            name="ck_agent_delegation_no_self_delegation",
+        ),
+        CheckConstraint(
+            "expires_at > issued_at",
+            name="ck_agent_delegation_expires_after_issued",
+        ),
+        CheckConstraint(
+            "status IN ('ACTIVE', 'REVOKED', 'EXPIRED')",
+            name="ck_agent_delegation_status_valid",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    delegator_agent_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("agents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    delegate_agent_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("agents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    trust_relationship_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("agent_trust_relationships.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    action_scope: Mapped[list] = mapped_column(
+        JSON,
+        nullable=False,
+        default=list,
+    )
+
+    resource_scope: Mapped[list] = mapped_column(
+        JSON,
+        nullable=False,
+        default=list,
+    )
+
+    capability_scope: Mapped[list] = mapped_column(
+        JSON,
+        nullable=False,
+        default=list,
+    )
+
+    parent_delegation_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("agent_delegations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="ACTIVE",
+    )
+
+    issued_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    signature: Mapped[str] = mapped_column(
+        String(512),
+        nullable=False,
+    )
+
+    signing_key_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("agent_signing_keys.id"),
+        nullable=False,
+    )
+
+    request_id: Mapped[str | None] = mapped_column(
+        String(36),
+        nullable=True,
+    )
+
+    meta_data: Mapped[dict] = mapped_column(
+        "metadata",
+        JSON,
+        nullable=False,
+        default=dict,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
 

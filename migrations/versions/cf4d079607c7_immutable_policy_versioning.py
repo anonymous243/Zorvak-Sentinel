@@ -35,6 +35,9 @@ def upgrade() -> None:
     sa.UniqueConstraint('policy_id', 'version', name='uq_policy_versions_policy_id_version')
     )
     
+    conn = op.get_bind()
+    policies = conn.execute(sa.text("SELECT id, effect, priority, action, resource, created_at FROM policies")).fetchall()
+
     with op.batch_alter_table('authorization_decisions', schema=None) as batch_op:
         batch_op.add_column(sa.Column('policy_version_id', sa.String(length=36), nullable=True))
 
@@ -43,8 +46,6 @@ def upgrade() -> None:
         
     # Data Migration
     import uuid
-    conn = op.get_bind()
-    policies = conn.execute(sa.text("SELECT id, effect, priority, action, resource, created_at FROM policies")).fetchall()
     for p in policies:
         version_id = str(uuid.uuid4())
         conn.execute(

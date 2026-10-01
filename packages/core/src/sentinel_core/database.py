@@ -12,6 +12,8 @@ from sentinel_core.config import DATABASE_URL
 engine = create_async_engine(
     DATABASE_URL,
     echo=False,
+    pool_pre_ping=True,
+    connect_args={"statement_cache_size": 0} if DATABASE_URL.startswith("postgresql") else {},
 )
 
 SessionFactory = async_sessionmaker(

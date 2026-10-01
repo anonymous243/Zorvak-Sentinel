@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 from datetime import datetime, timezone
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy import select
 
 from sentinel_core.principals import AuthenticatedPrincipal
@@ -153,6 +155,7 @@ async def check_capability(
     tool_id: str,
     action: str,
     resource: str,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> CapabilityResult:
     """
     Evaluates if an agent has the required capability to perform an action on a tool.
@@ -163,15 +166,20 @@ async def check_capability(
         from sentinel_core.security_event_service import persist_security_event, SecurityEventCreate
         from datetime import datetime, timezone
         
-        await persist_security_event(session, SecurityEventCreate(
-            tenant_id=principal.tenant_id,
-            event_type="CAPABILITY_DENIED",
-            occurred_at=datetime.now(timezone.utc),
-            outcome="FAILURE",
-            agent_id=principal.agent_id,
-            credential_id=principal.credential_id,
-            tool_id=tool_id,
-            reason_code=result.denial_detail or (result.reason.value if hasattr(result.reason, "value") else str(result.reason)),
-            metadata={"action": action, "resource": resource, "required_capability_id": result.capability_id}
-        ))
+        await persist_security_event(
+            session=session,
+            event=SecurityEventCreate(
+                tenant_id=principal.tenant_id,
+                event_type="CAPABILITY_DENIED",
+                occurred_at=datetime.now(timezone.utc),
+                outcome="FAILURE",
+                agent_id=principal.agent_id,
+                credential_id=principal.credential_id,
+                tool_id=tool_id,
+                reason_code=result.denial_detail or (result.reason.value if hasattr(result.reason, "value") else str(result.reason)),
+                metadata={"action": action, "resource": resource, "required_capability_id": result.capability_id}
+            ),
+            session_factory=session_factory,
+            principal=principal,
+        )
     return result

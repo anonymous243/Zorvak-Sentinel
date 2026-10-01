@@ -1,151 +1,216 @@
 import logging
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone, timedelta
+from typing import List, Dict, Any, Tuple
+from collections import defaultdict
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_, case
+from sqlalchemy import select, and_
 
-from sentinel_core.models import SecurityEvent, Incident, DailyAgentSecurityMetric, DailyTenantSecurityMetric
+from sentinel_core.models import (
+    SecurityEvent, Incident, Alert, Evidence, 
+    Investigation, AuthorizationDecisionRecord, ExecutionRecord
+)
+from sentinel_core.schemas_analytics import (
+    TimeWindow, TrendPoint, EventAnalyticsResponse,
+    IncidentAnalyticsResponse, AlertAnalyticsResponse,
+    EvidenceAnalyticsResponse, InvestigationAnalyticsResponse,
+    ExecutionAnalyticsResponse
+)
 
 logger = logging.getLogger(__name__)
 
-async def compute_agent_metrics(session: AsyncSession, tenant_id: str, target_date: date) -> None:
-    """
-    Computes daily agent metrics for a tenant by aggregating SecurityEvents and Incidents.
-    """
-    
-    # 1. Aggregate SecurityEvents
-    # SQLite/PostgreSQL Date coercion for the filtering is tricky with datetime columns.
-    # For SQLite, we can use func.date() assuming occurred_at is stored correctly, or filter by boundaries.
-    
-    start_time = datetime(target_date.year, target_date.month, target_date.day, tzinfo=timezone.utc)
-    end_time = datetime(target_date.year, target_date.month, target_date.day, 23, 59, 59, 999999, tzinfo=timezone.utc)
-    
-    stmt = select(
-        SecurityEvent.agent_id,
-        func.count().label("total"),
-        func.sum(
-            case(
-                (SecurityEvent.event_type == "POLICY_DENIED", 1),
-                else_=0
-            )
-        ).label("policy_denials"),
-        func.sum(
-            case(
-                (SecurityEvent.event_type == "CAPABILITY_DENIED", 1),
-                else_=0
-            )
-        ).label("capability_denials"),
-        func.sum(
-            case(
-                (SecurityEvent.event_type == "RISK_CRITICAL", 1),
-                else_=0
-            )
-        ).label("critical_risks")
-    ).where(
-        SecurityEvent.tenant_id == tenant_id,
-        SecurityEvent.agent_id.is_not(None),
-        SecurityEvent.occurred_at >= start_time,
-        SecurityEvent.occurred_at <= end_time
-    ).group_by(SecurityEvent.agent_id)
-    
-    event_result = await session.execute(stmt)
-    agent_stats = {row.agent_id: row for row in event_result.all()}
-    
-    # 2. Aggregate Incidents triggered
-    stmt_inc = select(
-        Incident.agent_id,
-        func.count().label("total")
-    ).where(
-        Incident.tenant_id == tenant_id,
-        Incident.agent_id.is_not(None),
-        Incident.created_at >= start_time,
-        Incident.created_at <= end_time
-    ).group_by(Incident.agent_id)
-    
-    inc_result = await session.execute(stmt_inc)
-    inc_stats = {row.agent_id: row.total for row in inc_result.all()}
-    
-    all_agents = set(agent_stats.keys()).union(set(inc_stats.keys()))
-    
-    # Upsert logic (simplistic SQLite specific for this project, generic ORM update otherwise)
-    for agent_id in all_agents:
-        stats = agent_stats.get(agent_id)
-        inc_count = inc_stats.get(agent_id, 0)
-        
-        policy_d = stats.policy_denials or 0 if stats else 0
-        cap_d = stats.capability_denials or 0 if stats else 0
-        crit_r = stats.critical_risks or 0 if stats else 0
-        total_ev = stats.total or 0 if stats else 0
-        
-        # Check if exists
-        exist_stmt = select(DailyAgentSecurityMetric).where(
-            DailyAgentSecurityMetric.tenant_id == tenant_id,
-            DailyAgentSecurityMetric.agent_id == agent_id,
-            DailyAgentSecurityMetric.metric_date == target_date
-        )
-        exist_res = await session.execute(exist_stmt)
-        record = exist_res.scalars().first()
-        
-        if record:
-            record.total_events = total_ev
-            record.policy_denials = policy_d
-            record.capability_denials = cap_d
-            record.critical_risks = crit_r
-            record.incidents_triggered = inc_count
-            record.updated_at = datetime.now(timezone.utc)
-        else:
-            record = DailyAgentSecurityMetric(
-                tenant_id=tenant_id,
-                agent_id=agent_id,
-                metric_date=target_date,
-                total_events=total_ev,
-                policy_denials=policy_d,
-                capability_denials=cap_d,
-                critical_risks=crit_r,
-                incidents_triggered=inc_count
-            )
-            session.add(record)
-            
-    await session.flush()
-
-
-async def compute_tenant_metrics(session: AsyncSession, tenant_id: str, target_date: date) -> None:
-    start_time = datetime(target_date.year, target_date.month, target_date.day, tzinfo=timezone.utc)
-    end_time = datetime(target_date.year, target_date.month, target_date.day, 23, 59, 59, 999999, tzinfo=timezone.utc)
-    
-    # 1. Total incidents today
-    stmt = select(func.count()).where(
-        Incident.tenant_id == tenant_id,
-        Incident.created_at >= start_time,
-        Incident.created_at <= end_time
-    )
-    inc_count = (await session.execute(stmt)).scalar() or 0
-    
-    # 2. Unique agents flagged
-    stmt_ag = select(func.count(func.distinct(Incident.agent_id))).where(
-        Incident.tenant_id == tenant_id,
-        Incident.created_at >= start_time,
-        Incident.created_at <= end_time,
-        Incident.agent_id.is_not(None)
-    )
-    ag_count = (await session.execute(stmt_ag)).scalar() or 0
-    
-    exist_stmt = select(DailyTenantSecurityMetric).where(
-        DailyTenantSecurityMetric.tenant_id == tenant_id,
-        DailyTenantSecurityMetric.metric_date == target_date
-    )
-    record = (await session.execute(exist_stmt)).scalars().first()
-    
-    if record:
-        record.total_incidents = inc_count
-        record.unique_agents_flagged = ag_count
-        record.updated_at = datetime.now(timezone.utc)
+def _get_time_bounds(window: TimeWindow) -> Tuple[datetime, datetime]:
+    end = datetime.now(timezone.utc)
+    if window == TimeWindow.WINDOW_24H:
+        start = end - timedelta(hours=24)
+    elif window == TimeWindow.WINDOW_7D:
+        start = end - timedelta(days=7)
+    elif window == TimeWindow.WINDOW_30D:
+        start = end - timedelta(days=30)
     else:
-        record = DailyTenantSecurityMetric(
-            tenant_id=tenant_id,
-            metric_date=target_date,
-            total_incidents=inc_count,
-            unique_agents_flagged=ag_count
+        start = end - timedelta(hours=24)
+    return start, end
+
+def _bucket_timestamp(ts: datetime, window: TimeWindow) -> str:
+    # Deterministic bucket rounding
+    if window == TimeWindow.WINDOW_24H:
+        # bucket by hour
+        bucket = ts.replace(minute=0, second=0, microsecond=0)
+    else:
+        # bucket by day
+        bucket = ts.replace(hour=0, minute=0, second=0, microsecond=0)
+    return bucket.isoformat()
+
+def _build_trend(timestamps: List[datetime], window: TimeWindow) -> List[TrendPoint]:
+    counts = defaultdict(int)
+    for ts in timestamps:
+        # Ensure UTC
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        bucket = _bucket_timestamp(ts, window)
+        counts[bucket] += 1
+    
+    return [TrendPoint(timestamp=k, count=v) for k, v in sorted(counts.items())]
+
+
+async def get_event_analytics(session: AsyncSession, tenant_id: str, window: TimeWindow) -> EventAnalyticsResponse:
+    start_ts, end_ts = _get_time_bounds(window)
+    
+    stmt = select(SecurityEvent.event_type, SecurityEvent.outcome, SecurityEvent.occurred_at).where(
+        and_(
+            SecurityEvent.tenant_id == tenant_id,
+            SecurityEvent.occurred_at >= start_ts,
+            SecurityEvent.occurred_at <= end_ts
         )
-        session.add(record)
+    )
+    result = await session.execute(stmt)
+    rows = result.all()
+    
+    total = 0
+    by_type = defaultdict(int)
+    by_outcome = defaultdict(int)
+    timestamps = []
+    
+    for row in rows:
+        total += 1
+        by_type[row.event_type] += 1
+        by_outcome[row.outcome] += 1
+        timestamps.append(row.occurred_at)
         
-    await session.flush()
+    return EventAnalyticsResponse(
+        total_events=total,
+        by_type=dict(by_type),
+        by_outcome=dict(by_outcome),
+        trend=_build_trend(timestamps, window)
+    )
+
+async def get_incident_analytics(session: AsyncSession, tenant_id: str, window: TimeWindow) -> IncidentAnalyticsResponse:
+    start_ts, end_ts = _get_time_bounds(window)
+    stmt = select(Incident.status, Incident.severity, Incident.created_at).where(
+        and_(
+            Incident.tenant_id == tenant_id,
+            Incident.created_at >= start_ts,
+            Incident.created_at <= end_ts
+        )
+    )
+    result = await session.execute(stmt)
+    rows = result.all()
+    
+    total = 0
+    open_count = 0
+    by_sev = defaultdict(int)
+    timestamps = []
+    
+    for row in rows:
+        total += 1
+        if row.status not in ["CLOSED", "RESOLVED"]:
+            open_count += 1
+        if row.severity:
+            by_sev[row.severity] += 1
+        timestamps.append(row.created_at)
+        
+    return IncidentAnalyticsResponse(
+        total_incidents=total,
+        open_incidents=open_count,
+        by_severity=dict(by_sev),
+        trend=_build_trend(timestamps, window)
+    )
+
+async def get_alert_analytics(session: AsyncSession, tenant_id: str, window: TimeWindow) -> AlertAnalyticsResponse:
+    start_ts, end_ts = _get_time_bounds(window)
+    stmt = select(Alert.status, Alert.created_at).where(
+        and_(
+            Alert.tenant_id == tenant_id,
+            Alert.created_at >= start_ts,
+            Alert.created_at <= end_ts
+        )
+    )
+    result = await session.execute(stmt)
+    rows = result.all()
+    
+    total = 0
+    by_status = defaultdict(int)
+    timestamps = []
+    
+    for row in rows:
+        total += 1
+        by_status[row.status] += 1
+        timestamps.append(row.created_at)
+        
+    return AlertAnalyticsResponse(
+        total_alerts=total,
+        by_status=dict(by_status),
+        trend=_build_trend(timestamps, window)
+    )
+
+async def get_evidence_analytics(session: AsyncSession, tenant_id: str, window: TimeWindow) -> EvidenceAnalyticsResponse:
+    start_ts, end_ts = _get_time_bounds(window)
+    stmt = select(Evidence.id).where(
+        and_(
+            Evidence.tenant_id == tenant_id,
+            Evidence.created_at >= start_ts,
+            Evidence.created_at <= end_ts
+        )
+    )
+    result = await session.execute(stmt)
+    rows = result.all()
+    
+    return EvidenceAnalyticsResponse(total_evidence=len(rows))
+
+async def get_investigation_analytics(session: AsyncSession, tenant_id: str, window: TimeWindow) -> InvestigationAnalyticsResponse:
+    start_ts, end_ts = _get_time_bounds(window)
+    stmt = select(Investigation.status, Investigation.created_at).where(
+        and_(
+            Investigation.tenant_id == tenant_id,
+            Investigation.created_at >= start_ts,
+            Investigation.created_at <= end_ts
+        )
+    )
+    result = await session.execute(stmt)
+    rows = result.all()
+    
+    total = 0
+    by_status = defaultdict(int)
+    timestamps = []
+    
+    for row in rows:
+        total += 1
+        by_status[row.status] += 1
+        timestamps.append(row.created_at)
+        
+    return InvestigationAnalyticsResponse(
+        total_investigations=total,
+        by_status=dict(by_status),
+        trend=_build_trend(timestamps, window)
+    )
+
+async def get_execution_analytics(session: AsyncSession, tenant_id: str, window: TimeWindow) -> ExecutionAnalyticsResponse:
+    start_ts, end_ts = _get_time_bounds(window)
+    stmt = select(AuthorizationDecisionRecord.effect, AuthorizationDecisionRecord.evaluated_at).where(
+        and_(
+            AuthorizationDecisionRecord.tenant_id == tenant_id,
+            AuthorizationDecisionRecord.evaluated_at >= start_ts,
+            AuthorizationDecisionRecord.evaluated_at <= end_ts
+        )
+    )
+    result = await session.execute(stmt)
+    rows = result.all()
+    
+    total = 0
+    by_effect = defaultdict(int)
+    timestamps = []
+    
+    for row in rows:
+        total += 1
+        if isinstance(row.effect, str):
+            by_effect[row.effect] += 1
+        elif hasattr(row.effect, 'name'):
+            by_effect[row.effect.name] += 1
+        else:
+            by_effect[str(row.effect)] += 1
+        timestamps.append(row.evaluated_at)
+        
+    return ExecutionAnalyticsResponse(
+        total_decisions=total,
+        by_effect=dict(by_effect),
+        trend=_build_trend(timestamps, window)
+    )

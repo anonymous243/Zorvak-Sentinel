@@ -67,4 +67,9 @@ def downgrade() -> None:
     op.drop_index('ix_agent_credentials_agent_id', table_name='agent_credentials')
     op.drop_table('agent_credentials')
     op.drop_table('tenants')
+    
+    # Drop enum type in postgresql
+    bind = op.get_bind()
+    if bind.engine.name == 'postgresql':
+        op.execute("DROP TYPE IF EXISTS credential_status")
     # ### end Alembic commands ###

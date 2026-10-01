@@ -45,4 +45,9 @@ def downgrade() -> None:
         batch_op.drop_index('ix_agent_signing_keys_agent_id')
 
     op.drop_table('agent_signing_keys')
+    
+    # Drop enum type in postgresql
+    bind = op.get_bind()
+    if bind.engine.name == 'postgresql':
+        op.execute("DROP TYPE IF EXISTS signing_key_status")
     # ### end Alembic commands ###

@@ -27,9 +27,13 @@ def upgrade() -> None:
         batch_op.create_unique_constraint('uq_policies_tenant_name', ['tenant_id', 'name'])
         batch_op.create_foreign_key('fk_policies_tenant_id_tenants', 'tenants', ['tenant_id'], ['id'])
 
+    policy_version_status = sa.Enum('draft', 'review', 'approved', 'published', 'active', 'deprecated', name='policy_version_status')
+    if op.get_bind().engine.name == 'postgresql':
+        policy_version_status.create(op.get_bind(), checkfirst=True)
+
     with op.batch_alter_table('policy_versions', schema=None) as batch_op:
         batch_op.add_column(sa.Column('tenant_id', sa.String(length=36), nullable=False))
-        batch_op.add_column(sa.Column('status', sa.Enum('draft', 'review', 'approved', 'published', 'active', 'deprecated', name='policy_version_status'), nullable=False))
+        batch_op.add_column(sa.Column('status', policy_version_status, nullable=False))
         batch_op.create_foreign_key('fk_policy_versions_tenant_id_tenants', 'tenants', ['tenant_id'], ['id'])
 
     # ### end Alembic commands ###
@@ -41,6 +45,10 @@ def downgrade() -> None:
         batch_op.drop_constraint('fk_policy_versions_tenant_id_tenants', type_='foreignkey')
         batch_op.drop_column('status')
         batch_op.drop_column('tenant_id')
+
+    if op.get_bind().engine.name == 'postgresql':
+        policy_version_status = sa.Enum('draft', 'review', 'approved', 'published', 'active', 'deprecated', name='policy_version_status')
+        policy_version_status.drop(op.get_bind(), checkfirst=True)
 
     with op.batch_alter_table('policies', schema=None) as batch_op:
         batch_op.drop_constraint('fk_policies_tenant_id_tenants', type_='foreignkey')

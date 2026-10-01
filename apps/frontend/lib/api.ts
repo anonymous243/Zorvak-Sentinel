@@ -60,6 +60,7 @@ async function request<T>(
   const res = await fetch(`${API_URL}${path}`, {
     ...options,
     headers,
+    credentials: 'include' // include cookies in requests to the backend
   });
 
   if (res.status === 401) throw { status: 401, message: 'Authentication failed. Check your credentials.' } as ApiError;
@@ -68,7 +69,13 @@ async function request<T>(
   if (res.status === 409) throw { status: 409, message: 'Conflict: This resource was modified by another process. Refresh and retry.' } as ApiError;
   if (res.status === 422) {
     const body = await res.json().catch(() => ({}));
-    throw { status: 422, message: body?.detail || 'Validation error.' } as ApiError;
+    let msg = 'Validation error.';
+    if (typeof body?.detail === 'string') {
+      msg = body.detail;
+    } else if (Array.isArray(body?.detail)) {
+      msg = body.detail.map((e: any) => e.msg).join(', ');
+    }
+    throw { status: 422, message: msg } as ApiError;
   }
   if (!res.ok) {
     throw { status: res.status, message: 'An unexpected error occurred. Please try again.' } as ApiError;
@@ -80,6 +87,12 @@ async function request<T>(
 
 // ── Health ──────────────────────────────────────────────────────────────────
 export const health = () => request<{ status: string }>('/health');
+
+// ── Auth ──────────────────────────────────────────────────────────────────
+export const login = (data: any) => request('/auth/login', { method: 'POST', body: JSON.stringify(data) });
+export const signup = (data: any) => request('/auth/signup', { method: 'POST', body: JSON.stringify(data) });
+export const logout = () => request('/auth/logout', { method: 'POST' });
+export const getMe = () => request('/auth/me');
 
 // ── Agents ──────────────────────────────────────────────────────────────────
 export type Agent = {
