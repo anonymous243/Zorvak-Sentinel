@@ -91,7 +91,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     );
   }
 
-  return <Ctx.Provider value={{ user, organizations, activeTenantId, logout, setActiveTenant }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ user, organizations, activeTenantId, loading, logout, setActiveTenant }}>{children}</Ctx.Provider>;
 }
 
 export const useAuth = () => useContext(Ctx);

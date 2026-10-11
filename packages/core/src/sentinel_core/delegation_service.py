@@ -461,13 +461,13 @@ async def _validate_delegation_chain(
         if delegation.action_scope != ["*"] and not set(action_scope).issubset(set(delegation.action_scope)):
             raise ValueError(f"Transitive delegation escalation: requested action_scope exceeds ancestor {current_delegation_id}")
         
-        # Resource scope monotonic
+        # Resource scope monotonic: every requested resource must match an ancestor resource scope
         if delegation.resource_scope != ["*"]:
-            # Need to ensure every requested resource pattern is matched by at least one ancestor resource pattern
-            # For simplicity, if requested is strict subset or exact match. Wait, subset matching for patterns is complex.
-            # We will use simple subset check for literal scopes, but ResourceScopeMatcher is strictly used at runtime.
-            # Here we just ensure we don't allow escalation. 
-            pass
+            if "*" in resource_scope:
+                raise ValueError(f"Transitive delegation escalation: wildcard resource exceeds ancestor {current_delegation_id}")
+            for req_res in resource_scope:
+                if not any(ResourceScopeMatcher.matches(ancestor_res, req_res) for ancestor_res in delegation.resource_scope):
+                    raise ValueError(f"Transitive delegation escalation: requested resource '{req_res}' exceeds ancestor {current_delegation_id}")
 
         current_delegation_id = delegation.parent_delegation_id
 

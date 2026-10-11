@@ -47,6 +47,11 @@ def canonicalize_request(
     if getattr(request, "delegation_id", None):
         payload["delegation_id"] = str(request.delegation_id)
 
+    # Deterministically bind caller-provided context/parameters into security identity
+    if getattr(request, "context", None):
+        # Sort keys and ensure deterministic recursive representation
+        payload["context"] = dict(sorted(request.context.items()))
+
     return json.dumps(
         payload,
         ensure_ascii=True,

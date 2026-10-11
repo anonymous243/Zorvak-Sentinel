@@ -1,0 +1,58 @@
+name: Security Regression & CI Baseline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  security-tests:
+    name: PostgreSQL Security Regression Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: sentinel_test
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: sentinel_test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e packages/core
+          pip install -e packages/policy
+          pip install -e apps/api
+
+      - name: Run Database Migrations
+        env:
+          DATABASE_URL: postgresql+asyncpg://sentinel_test:test_password@localhost:5432/sentinel_test_db
+        run: |
+          alembic upgrade head
+          alembic check
+
+      - name: Run Security Regression Suite
+        env:
+          DATABASE_URL: postgresql+asyncpg://sentinel_test:test_password@localhost:5432/sentinel_test_db
+        run: |
+          pytest tests/ -v

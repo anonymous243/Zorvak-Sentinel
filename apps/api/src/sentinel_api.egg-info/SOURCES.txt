@@ -7,4 +7,11 @@ src/sentinel_api.egg-info/dependency_links.txt
 src/sentinel_api.egg-info/requires.txt
 src/sentinel_api.egg-info/top_level.txt
 src/sentinel_api/routes/__init__.py
+src/sentinel_api/routes/ai_security.py
+src/sentinel_api/routes/alerts.py
+src/sentinel_api/routes/analytics.py
+src/sentinel_api/routes/auth.py
+src/sentinel_api/routes/delegations.py
+src/sentinel_api/routes/evidence.py
+src/sentinel_api/routes/investigations.py
 src/sentinel_api/routes/policies.py

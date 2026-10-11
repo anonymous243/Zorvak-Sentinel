@@ -29,9 +29,9 @@ class ResourceScopeMatcher:
     def matches(granted_scope: str, requested_resource: str) -> bool:
         if granted_scope == "*":
             return True
-        if granted_scope == requested_resource:
-            return True
-        return False
+        if granted_scope.endswith("*"):
+            return requested_resource.startswith(granted_scope[:-1])
+        return granted_scope == requested_resource
 
 
 async def _check_capability_internal(

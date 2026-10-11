@@ -5,6 +5,7 @@ src/sentinel_core/agent_service.py
 src/sentinel_core/ai_security_plane.py
 src/sentinel_core/alert_service.py
 src/sentinel_core/analytics_service.py
+src/sentinel_core/auth_service_human.py
 src/sentinel_core/authentication_service.py
 src/sentinel_core/authorization.py
 src/sentinel_core/authorization_service.py
@@ -16,8 +17,10 @@ src/sentinel_core/conflict_analyzer.py
 src/sentinel_core/database.py
 src/sentinel_core/decision_engine.py
 src/sentinel_core/decision_service.py
+src/sentinel_core/delegation_service.py
 src/sentinel_core/distributed_lock.py
 src/sentinel_core/events.py
+src/sentinel_core/evidence_service.py
 src/sentinel_core/execution.py
 src/sentinel_core/federation_service.py
 src/sentinel_core/incident_detector.py
@@ -29,11 +32,15 @@ src/sentinel_core/policy_service.py
 src/sentinel_core/policy_simulator.py
 src/sentinel_core/policy_validator.py
 src/sentinel_core/principals.py
+src/sentinel_core/rbac.py
 src/sentinel_core/remediation_service.py
 src/sentinel_core/request_signing.py
 src/sentinel_core/risk.py
 src/sentinel_core/risk_engine.py
 src/sentinel_core/schemas.py
+src/sentinel_core/schemas_analytics.py
+src/sentinel_core/schemas_human.py
+src/sentinel_core/security_assurance.py
 src/sentinel_core/security_event_service.py
 src/sentinel_core/signing_key_service.py
 src/sentinel_core.egg-info/PKG-INFO

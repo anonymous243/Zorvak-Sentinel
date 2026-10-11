@@ -1,3 +1,4 @@
+import os
 from fastapi import Depends, FastAPI, HTTPException, status, Request, Header
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -53,10 +54,16 @@ app = FastAPI(
     version="0.1.0",
 )
 
+from sentinel_core.rate_limiter import DistributedRateLimitMiddleware
+
+app.add_middleware(DistributedRateLimitMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
+cors_origins_env = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
+allowed_origins = [orig.strip() for orig in cors_origins_env.split(",") if orig.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
